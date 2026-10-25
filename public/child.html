@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Child Device Companion</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDSEixDyoevv7EaJyJwjMQ-3qBSEmsnq5w",
+      authDomain: "web-panel-85cd9.firebaseapp.com",
+      projectId: "web-panel-85cd9",
+      storageBucket: "web-panel-85cd9.firebasestorage.app",
+      messagingSenderId: "301587767103",
+      appId: "1:301587767103:web:cfb34de3820beee684bd8a"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // Get or create unique device ID
+    let deviceId = localStorage.getItem('child_device_id');
+    if (!deviceId) {
+      deviceId = 'phone_' + Math.floor(1000 + Math.random() * 9000);
+      localStorage.setItem('child_device_id', deviceId);
+    }
+
+    let batteryPercent = 85;
+    if (navigator.getBattery) {
+      navigator.getBattery().then(battery => {
+        batteryPercent = Math.round(battery.level * 100);
+        battery.addEventListener('levelchange', () => {
+          batteryPercent = Math.round(battery.level * 100);
+          syncData();
+        });
+      });
+    }
+
+    let deviceName = localStorage.getItem('child_name') || "Child Phone (" + deviceId + ")";
+
+    async function syncData() {
+      try {
+        const deviceRef = doc(db, "devices", deviceId);
+        await setDoc(deviceRef, {
+          deviceName: deviceName,
+          battery: batteryPercent,
+          isOnline: true,
+          lastActive: new Date().toISOString(),
+          dailyUsage: {
+            "YouTube Kids": "40m",
+            "Duolingo": "25m",
+            "Roblox": "35m"
+          }
+        }, { merge: true });
+
+        document.getElementById('status-msg').innerText = "Last Synced: " + new Date().toLocaleTimeString();
+        document.getElementById('battery-display').innerText = batteryPercent + "%";
+      } catch (err) {
+        console.error("Sync error:", err);
+      }
+    }
+
+    // Listen for parent lock commands
+    function listenForLock() {
+      const deviceRef = doc(db, "devices", deviceId);
+      onSnapshot(deviceRef, (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          const lockScreen = document.getElementById('lock-overlay');
+          if (data.isLocked) {
+            lockScreen.classList.remove('hidden');
+          } else {
+            lockScreen.classList.add('hidden');
+          }
+        }
+      });
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('device-id-text').innerText = deviceId;
+      document.getElementById('child-name-input').value = deviceName;
+
+      document.getElementById('save-name-btn').addEventListener('click', () => {
+        const newName = document.getElementById('child-name-input').value.trim();
+        if (newName) {
+          deviceName = newName;
+          localStorage.setItem('child_name', deviceName);
+          syncData();
+          alert("Device name updated!");
+        }
+      });
+
+      // Initial Sync
+      syncData();
+      listenForLock();
+
+      // Keep syncing every 15 seconds
+      setInterval(syncData, 15000);
+    });
+  </script>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+
+  <!-- Child Companion Card -->
+  <div class="bg-white rounded-3xl shadow-lg border border-gray-100 max-w-sm w-full p-6 text-center">
+    <div class="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl font-bold">
+      📱
+    </div>
+
+    <h1 class="text-xl font-bold text-gray-800 mb-1">Child Device Active</h1>
+    <p class="text-xs text-gray-400 mb-4">Device ID: <span id="device-id-text" class="font-mono font-semibold text-gray-600">Loading...</span></p>
+
+    <div class="bg-emerald-50 text-emerald-700 text-xs py-2 px-3 rounded-xl mb-4 flex items-center justify-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+      Connected to ParentGuard
+    </div>
+
+    <div class="grid grid-cols-2 gap-3 mb-6">
+      <div class="bg-gray-50 p-3 rounded-xl">
+        <p class="text-xs text-gray-400">Battery</p>
+        <p id="battery-display" class="text-lg font-bold text-gray-800">85%</p>
+      </div>
+      <div class="bg-gray-50 p-3 rounded-xl">
+        <p class="text-xs text-gray-400">Protection</p>
+        <p class="text-sm font-bold text-indigo-600 mt-1">Active</p>
+      </div>
+    </div>
+
+    <div class="text-left mb-6">
+      <label class="text-xs text-gray-500 font-medium">Child/Device Name:</label>
+      <div class="flex gap-2 mt-1">
+        <input type="text" id="child-name-input" class="flex-1 bg-gray-50 border border-gray-200 text-sm rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="e.g. Rohan's Phone">
+        <button id="save-name-btn" class="bg-gray-800 hover:bg-black text-white text-xs px-3 py-2 rounded-xl font-medium">Save</button>
+      </div>
+    </div>
+
+    <p id="status-msg" class="text-xs text-gray-400">Syncing with Firebase...</p>
+  </div>
+
+  <!-- Fullscreen Parental Lock Screen -->
+  <div id="lock-overlay" class="fixed inset-0 bg-red-600 z-50 flex flex-col items-center justify-center text-white p-6 text-center hidden">
+    <div class="w-24 h-24 bg-white/20 rounded-full flex items-center justify-center text-5xl mb-6 shadow-inner">
+      🔒
+    </div>
+    <h2 class="text-3xl font-black mb-2">Device Locked</h2>
+    <p class="text-red-100 max-w-xs text-sm mb-6">
+      Aapke parent ne web dashboard se is device ko temporarily lock kar diya hai.
+    </p>
+    <div class="bg-white/10 px-4 py-2 rounded-full text-xs font-medium tracking-wide">
+      ParentGuard Screen Time Protection
+    </div>
+  </div>
+
+</body>
+</html>
