@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ParentGuard - Web Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase App & Firestore SDKs -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, collection, onSnapshot, doc, updateDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    // Load saved Firebase config or prompt user
+    let db = null;
+    const configStorageKey = 'parentguard_firebase_config';
+
+    function initFirebase(config) {
+      try {
+        const app = initializeApp(config);
+        db = getFirestore(app);
+        listenToDevices();
+        document.getElementById('config-modal').classList.add('hidden');
+        document.getElementById('status-indicator').classList.remove('bg-red-500');
+        document.getElementById('status-indicator').classList.add('bg-green-500');
+        document.getElementById('status-text').innerText = 'Connected to Firebase';
+      } catch (err) {
+        alert("Firebase init error: " + err.message);
+      }
+    }
+
+    function listenToDevices() {
+      const devicesRef = collection(db, "devices");
+      onSnapshot(devicesRef, (snapshot) => {
+        const devicesList = document.getElementById('devices-container');
+        devicesList.innerHTML = '';
+
+        if (snapshot.empty) {
+          devicesList.innerHTML = `
+            <div class="col-span-full text-center py-12 bg-white rounded-xl shadow-sm border border-gray-100">
+              <p class="text-gray-500 text-lg">Koi device connected nahi hai.</p>
+              <p class="text-sm text-gray-400 mt-1">Apne child ke Android phone me app open karke sync karein.</p>
+            </div>
+          `;
+          return;
+        }
+
+        snapshot.forEach((deviceDoc) => {
+          const data = deviceDoc.data();
+          const id = deviceDoc.id;
+          devicesList.appendChild(createDeviceCard(id, data));
+        });
+      });
+    }
+
+    function createDeviceCard(id, data) {
+      const card = document.createElement('div');
+      card.className = "bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex flex-col justify-between hover:shadow-md transition";
+
+      const isLocked = data.isLocked || false;
+      const battery = data.battery ?? 100;
+      const deviceName = data.deviceName || "Child Phone";
+      const lastActive = data.lastActive ? new Date(data.lastActive).toLocaleTimeString() : 'Unknown';
+      const apps = data.dailyUsage || { "YouTube": "45m", "Chrome": "20m", "Study App": "60m" };
+
+      let appsHtml = '';
+      for (const [app, duration] of Object.entries(apps)) {
+        appsHtml += `
+          <div class="flex justify-between items-center text-sm py-1 border-b border-gray-50">
+            <span class="text-gray-600 font-medium">${app}</span>
+            <span class="text-indigo-600 font-semibold">${duration}</span>
+          </div>
+        `;
+      }
+
+      card.innerHTML = `
+        <div>
+          <div class="flex justify-between items-start mb-4">
+            <div>
+              <h3 class="text-xl font-bold text-gray-800">${deviceName}</h3>
+              <p class="text-xs text-gray-400">ID: ${id}</p>
+            </div>
+            <span class="px-2.5 py-1 text-xs font-semibold rounded-full ${data.isOnline ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}">
+              ${data.isOnline ? 'Online' : 'Offline'}
+            </span>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3 mb-5">
+            <div class="bg-gray-50 p-3 rounded-xl">
+              <p class="text-xs text-gray-500">Battery</p>
+              <p class="text-lg font-bold text-gray-800">${battery}%</p>
+            </div>
+            <div class="bg-gray-50 p-3 rounded-xl">
+              <p class="text-xs text-gray-500">Last Active</p>
+              <p class="text-sm font-semibold text-gray-800 mt-1">${lastActive}</p>
+            </div>
+          </div>
+
+          <div class="mb-5">
+            <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Today's App Usage</h4>
+            <div class="space-y-1">${appsHtml}</div>
+          </div>
+        </div>
+
+        <div class="pt-4 border-t border-gray-100 flex gap-2">
+          <button id="toggle-lock-${id}" class="flex-1 py-2.5 rounded-xl font-medium text-sm transition ${
+            isLocked ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-red-600 hover:bg-red-700 text-white'
+          }">
+            ${isLocked ? 'Unlock Device' : 'Lock Device'}
+          </button>
+        </div>
+      `;
+
+      card.querySelector(`#toggle-lock-${id}`).addEventListener('click', async () => {
+        try {
+          await updateDoc(doc(db, "devices", id), {
+            isLocked: !isLocked,
+            lastCommandTime: new Date().toISOString()
+          });
+        } catch (e) {
+          alert("Error: " + e.message);
+        }
+      });
+
+      return card;
+    }
+
+    // Modal Config Handling
+    window.addEventListener('DOMContentLoaded', () => {
+      const savedConfig = localStorage.getItem(configStorageKey);
+      if (savedConfig) {
+        initFirebase(JSON.parse(savedConfig));
+      } else {
+        document.getElementById('config-modal').classList.remove('hidden');
+      }
+
+      document.getElementById('save-config-btn').addEventListener('click', () => {
+        const rawJson = document.getElementById('firebase-config-input').value;
+        try {
+          const config = JSON.parse(rawJson);
+          localStorage.setItem(configStorageKey, JSON.stringify(config));
+          initFirebase(config);
+        } catch (e) {
+          alert("Invalid JSON format! Firebase Console se web app config copy karein.");
+        }
+      });
+
+      document.getElementById('open-config-btn').addEventListener('click', () => {
+        document.getElementById('config-modal').classList.remove('hidden');
+      });
+    });
+  </script>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-800 font-sans">
+  
+  <!-- Header -->
+  <header class="bg-white border-b border-gray-200 sticky top-0 z-30">
+    <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
+          P
+        </div>
+        <div>
+          <h1 class="text-lg font-bold text-gray-900 leading-tight">ParentGuard</h1>
+          <p class="text-xs text-gray-400">Parental Control Panel</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2 text-xs text-gray-600 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-200">
+          <span id="status-indicator" class="w-2 h-2 rounded-full bg-red-500"></span>
+          <span id="status-text">Disconnected</span>
+        </div>
+        <button id="open-config-btn" class="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-semibold px-3 py-1.5 rounded-lg transition">
+          Firebase Settings
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="max-w-6xl mx-auto px-6 py-8">
+    <div class="flex justify-between items-center mb-6">
+      <div>
+        <h2 class="text-2xl font-bold text-gray-900">Child Devices</h2>
+        <p class="text-sm text-gray-500">Real-time status aur device control settings</p>
+      </div>
+    </div>
+
+    <!-- Device Cards Grid -->
+    <div id="devices-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <!-- Cards will be populated here via Firebase Realtime Listener -->
+      <div class="col-span-full text-center py-12 text-gray-400">Loading devices...</div>
+    </div>
+  </main>
+
+  <!-- Firebase Config Modal -->
+  <div id="config-modal" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-gray-100">
+      <h3 class="text-lg font-bold text-gray-900 mb-2">Connect Your Firebase</h3>
+      <p class="text-sm text-gray-600 mb-4">
+        Firebase Console -> Project Settings -> General -> "Your apps" (Web) se <code>firebaseConfig</code> JSON paste karein:
+      </p>
+      <textarea id="firebase-config-input" rows="8" class="w-full font-mono text-xs bg-gray-50 border border-gray-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder='{
+  "apiKey": "AIzaSy...",
+  "authDomain": "...",
+  "projectId": "...",
+  "storageBucket": "...",
+  "messagingSenderId": "...",
+  "appId": "..."
+}'></textarea>
+      <div class="flex justify-end gap-2 mt-4">
+        <button onclick="document.getElementById('config-modal').classList.add('hidden')" class="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-xl">Cancel</button>
+        <button id="save-config-btn" class="px-5 py-2 text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl">Save & Connect</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
