@@ -8,11 +8,12 @@
   <!-- Firebase App & Firestore SDKs -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getFirestore, collection, onSnapshot, doc, updateDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+    import { getFirestore, collection, onSnapshot, doc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-    // Load saved Firebase config or prompt user
     let db = null;
     const configStorageKey = 'parentguard_firebase_config';
+    let currentFilter = 'all'; // 'all', 'online', 'offline'
+    let currentDevices = []; // Cache for filtering and live re-evaluating heartbeat
 
     function initFirebase(config) {
       try {
@@ -24,44 +25,95 @@
         document.getElementById('status-indicator').classList.add('bg-green-500');
         document.getElementById('status-text').innerText = 'Connected to Firebase';
       } catch (err) {
-        alert("Firebase init error: " + err.message);
+        console.error("Firebase init error:", err);
       }
     }
 
     function listenToDevices() {
       const devicesRef = collection(db, "devices");
       onSnapshot(devicesRef, (snapshot) => {
-        const devicesList = document.getElementById('devices-container');
-        devicesList.innerHTML = '';
-
-        if (snapshot.empty) {
-          devicesList.innerHTML = `
-            <div class="col-span-full text-center py-12 bg-white rounded-xl shadow-sm border border-gray-100">
-              <p class="text-gray-500 text-lg">Koi device connected nahi hai.</p>
-              <p class="text-sm text-gray-400 mt-1">Apne child ke Android phone me app open karke sync karein.</p>
-            </div>
-          `;
-          return;
-        }
-
+        currentDevices = [];
         snapshot.forEach((deviceDoc) => {
-          const data = deviceDoc.data();
-          const id = deviceDoc.id;
-          devicesList.appendChild(createDeviceCard(id, data));
+          currentDevices.push({ id: deviceDoc.id, ...deviceDoc.data() });
         });
+        renderDevices();
+      }, (error) => {
+        console.error("Firestore listener error:", error);
       });
     }
 
-    function createDeviceCard(id, data) {
+    // Re-render devices periodically to update online/offline timers in real-time
+    setInterval(() => {
+      if (currentDevices.length > 0) {
+        renderDevices();
+      }
+    }, 10000);
+
+    function renderDevices() {
+      const container = document.getElementById('devices-container');
+      container.innerHTML = '';
+
+      const now = Date.now();
+      let onlineCount = 0;
+      let offlineCount = 0;
+
+      // Classify online vs offline based on 90s heartbeat
+      const processedDevices = currentDevices.map(device => {
+        const lastActiveTime = device.lastActive ? new Date(device.lastActive).getTime() : 0;
+        const diffSeconds = Math.round((now - lastActiveTime) / 1000);
+        const isOnline = diffSeconds <= 90;
+
+        if (isOnline) onlineCount++; else offlineCount++;
+
+        return { ...device, isOnline, diffSeconds };
+      });
+
+      // Update counters
+      document.getElementById('count-all').innerText = processedDevices.length;
+      document.getElementById('count-online').innerText = onlineCount;
+      document.getElementById('count-offline').innerText = offlineCount;
+
+      // Filter
+      const filtered = processedDevices.filter(d => {
+        if (currentFilter === 'online') return d.isOnline;
+        if (currentFilter === 'offline') return !d.isOnline;
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = `
+          <div class="col-span-full text-center py-12 bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <p class="text-gray-500 text-lg font-semibold">Koi device nahi mila (${currentFilter.toUpperCase()}).</p>
+            <p class="text-sm text-gray-400 mt-1">Jab child device active hoga, yahan real-time dikhega.</p>
+          </div>
+        `;
+        return;
+      }
+
+      filtered.forEach(device => {
+        container.appendChild(createDeviceCard(device));
+      });
+    }
+
+    function createDeviceCard(device) {
       const card = document.createElement('div');
-      card.className = "bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex flex-col justify-between hover:shadow-md transition";
+      card.className = "bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex flex-col justify-between hover:shadow-md transition relative";
 
-      const isLocked = data.isLocked || false;
-      const battery = data.battery ?? 100;
-      const deviceName = data.deviceName || "Child Phone";
-      const lastActive = data.lastActive ? new Date(data.lastActive).toLocaleTimeString() : 'Unknown';
-      const apps = data.dailyUsage || { "YouTube": "45m", "Chrome": "20m", "Study App": "60m" };
+      const isLocked = device.isLocked || false;
+      const battery = device.battery ?? 100;
+      const deviceName = device.deviceName || "Child Phone";
+      const id = device.id;
 
+      let timeAgo = 'Unknown';
+      if (device.diffSeconds < 60) {
+        timeAgo = 'Active now';
+      } else if (device.diffSeconds < 3600) {
+        timeAgo = `${Math.floor(device.diffSeconds / 60)}m ago`;
+      } else {
+        timeAgo = `${Math.floor(device.diffSeconds / 3600)}h ago`;
+      }
+
+      const apps = device.dailyUsage || { "YouTube": "45m", "Chrome": "20m", "Study App": "60m" };
       let appsHtml = '';
       for (const [app, duration] of Object.entries(apps)) {
         appsHtml += `
@@ -76,22 +128,28 @@
         <div>
           <div class="flex justify-between items-start mb-4">
             <div>
-              <h3 class="text-xl font-bold text-gray-800">${deviceName}</h3>
-              <p class="text-xs text-gray-400">ID: ${id}</p>
+              <h3 class="text-lg font-bold text-gray-800 leading-snug">${deviceName}</h3>
+              <p class="text-xs text-gray-400 font-mono mt-0.5">ID: ${id}</p>
             </div>
-            <span class="px-2.5 py-1 text-xs font-semibold rounded-full ${data.isOnline ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}">
-              ${data.isOnline ? 'Online' : 'Offline'}
-            </span>
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-full ${
+                device.isOnline ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-500'
+              }">
+                <span class="w-1.5 h-1.5 rounded-full ${device.isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}"></span>
+                ${device.isOnline ? 'Online' : 'Offline'}
+              </span>
+              <button id="del-${id}" title="Remove device" class="text-gray-300 hover:text-red-500 text-sm px-1 transition">✕</button>
+            </div>
           </div>
 
           <div class="grid grid-cols-2 gap-3 mb-5">
             <div class="bg-gray-50 p-3 rounded-xl">
-              <p class="text-xs text-gray-500">Battery</p>
+              <p class="text-xs text-gray-400">Battery</p>
               <p class="text-lg font-bold text-gray-800">${battery}%</p>
             </div>
             <div class="bg-gray-50 p-3 rounded-xl">
-              <p class="text-xs text-gray-500">Last Active</p>
-              <p class="text-sm font-semibold text-gray-800 mt-1">${lastActive}</p>
+              <p class="text-xs text-gray-400">Heartbeat</p>
+              <p class="text-sm font-semibold text-gray-800 mt-1">${timeAgo}</p>
             </div>
           </div>
 
@@ -103,13 +161,14 @@
 
         <div class="pt-4 border-t border-gray-100 flex gap-2">
           <button id="toggle-lock-${id}" class="flex-1 py-2.5 rounded-xl font-medium text-sm transition ${
-            isLocked ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-red-600 hover:bg-red-700 text-white'
+            isLocked ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-sm' : 'bg-red-600 hover:bg-red-700 text-white shadow-sm'
           }">
             ${isLocked ? 'Unlock Device' : 'Lock Device'}
           </button>
         </div>
       `;
 
+      // Lock button click
       card.querySelector(`#toggle-lock-${id}`).addEventListener('click', async () => {
         try {
           await updateDoc(doc(db, "devices", id), {
@@ -118,6 +177,17 @@
           });
         } catch (e) {
           alert("Error: " + e.message);
+        }
+      });
+
+      // Delete device click
+      card.querySelector(`#del-${id}`).addEventListener('click', async () => {
+        if (confirm(`Kya aap "${deviceName}" (${id}) ko list se delete karna chahte hain?`)) {
+          try {
+            await deleteDoc(doc(db, "devices", id));
+          } catch (e) {
+            alert("Delete error: " + e.message);
+          }
         }
       });
 
@@ -133,7 +203,6 @@
       appId: "1:301587767103:web:cfb34de3820beee684bd8a"
     };
 
-    // Modal Config Handling
     window.addEventListener('DOMContentLoaded', () => {
       const savedConfig = localStorage.getItem(configStorageKey);
       if (savedConfig) {
@@ -142,6 +211,22 @@
         initFirebase(defaultConfig);
       }
 
+      // Filter tab buttons
+      ['all', 'online', 'offline'].forEach(tab => {
+        document.getElementById(`filter-${tab}`).addEventListener('click', () => {
+          currentFilter = tab;
+          ['all', 'online', 'offline'].forEach(t => {
+            const btn = document.getElementById(`filter-${t}`);
+            if (t === tab) {
+              btn.className = "px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white transition";
+            } else {
+              btn.className = "px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-white text-gray-600 hover:bg-gray-100 border border-gray-200 transition";
+            }
+          });
+          renderDevices();
+        });
+      });
+
       document.getElementById('save-config-btn').addEventListener('click', () => {
         const rawJson = document.getElementById('firebase-config-input').value;
         try {
@@ -149,7 +234,7 @@
           localStorage.setItem(configStorageKey, JSON.stringify(config));
           initFirebase(config);
         } catch (e) {
-          alert("Invalid JSON format! Firebase Console se web app config copy karein.");
+          alert("Invalid JSON format!");
         }
       });
 
@@ -177,7 +262,7 @@
       <div class="flex items-center gap-4">
         <div class="flex items-center gap-2 text-xs text-gray-600 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-200">
           <span id="status-indicator" class="w-2 h-2 rounded-full bg-red-500"></span>
-          <span id="status-text">Disconnected</span>
+          <span id="status-text">Connecting...</span>
         </div>
         <button id="open-config-btn" class="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-semibold px-3 py-1.5 rounded-lg transition">
           Firebase Settings
@@ -204,9 +289,21 @@
       </div>
     </div>
 
+    <!-- Filter Bar (All / Online Only / Offline) -->
+    <div class="flex items-center gap-2 mb-6">
+      <button id="filter-all" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white transition">
+        All Devices (<span id="count-all">0</span>)
+      </button>
+      <button id="filter-online" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-white text-gray-600 hover:bg-gray-100 border border-gray-200 transition">
+        🟢 Online Only (<span id="count-online">0</span>)
+      </button>
+      <button id="filter-offline" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-white text-gray-600 hover:bg-gray-100 border border-gray-200 transition">
+        ⚪ Offline (<span id="count-offline">0</span>)
+      </button>
+    </div>
+
     <!-- Device Cards Grid -->
     <div id="devices-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-      <!-- Cards will be populated here via Firebase Realtime Listener -->
       <div class="col-span-full text-center py-12 text-gray-400">Loading devices...</div>
     </div>
   </main>
