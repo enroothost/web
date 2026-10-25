@@ -124,13 +124,22 @@
       return card;
     }
 
+    const defaultConfig = {
+      apiKey: "AIzaSyDSEixDyoevv7EaJyJwjMQ-3qBSEmsnq5w",
+      authDomain: "web-panel-85cd9.firebaseapp.com",
+      projectId: "web-panel-85cd9",
+      storageBucket: "web-panel-85cd9.firebasestorage.app",
+      messagingSenderId: "301587767103",
+      appId: "1:301587767103:web:cfb34de3820beee684bd8a"
+    };
+
     // Modal Config Handling
     window.addEventListener('DOMContentLoaded', () => {
       const savedConfig = localStorage.getItem(configStorageKey);
       if (savedConfig) {
         initFirebase(JSON.parse(savedConfig));
       } else {
-        document.getElementById('config-modal').classList.remove('hidden');
+        initFirebase(defaultConfig);
       }
 
       document.getElementById('save-config-btn').addEventListener('click', () => {
